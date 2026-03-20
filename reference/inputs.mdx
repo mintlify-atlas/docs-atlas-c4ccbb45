@@ -148,7 +148,7 @@ These variables have no default values and must be set in every module call.
 </ParamField>
 
 <ParamField path="trigger_on_package_timestamp" type="boolean" default="false">
-  When `false`, the file timestamp is ignored when deciding whether to recreate the deployment archive.
+  When `true`, the file timestamp is used when deciding whether to recreate the deployment archive. When `false` (the default), the timestamp is ignored and the archive is only recreated when the source content changes.
 </ParamField>
 
 ---
