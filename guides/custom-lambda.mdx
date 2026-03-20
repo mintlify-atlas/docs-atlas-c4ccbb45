@@ -1,0 +1,126 @@
+---
+title: "Custom Lambda function"
+description: "Replace the built-in notify_slack.py handler with your own Python function using the lambda_source_path variable."
+---
+
+The module ships with a built-in Lambda function (`functions/notify_slack.py`) that handles CloudWatch alarms, GuardDuty findings, Security Hub findings, and more. If you need different formatting, additional logic, or a completely different notification target, you can provide your own Python file.
+
+## How it works
+
+Set `lambda_source_path` to the path of your Python file, relative to the root module. The module derives the handler name from the filename automatically:
+
+```hcl
+local.lambda_handler = try(split(".", basename(var.lambda_source_path))[0], "notify_slack")
+```
+
+For example, if `lambda_source_path = "functions/mylambda.py"`, the handler becomes `mylambda.lambda_handler`. Your Python file must define a function named `lambda_handler`.
+
+## Example custom function
+
+The following is the `functions/mylambda.py` example included in the module repository. It sends the raw SNS message body to a Slack channel using `urllib3`:
+
+```python
+import json
+import os
+
+import urllib3
+
+http = urllib3.PoolManager()
+
+
+def lambda_handler(event, context):
+    url = os.environ["SLACK_WEBHOOK_URL"]
+    msg = {
+        "channel": "#channel-name",
+        "username": "Prometheus",
+        "text": event["Records"][0]["Sns"]["Message"],
+        "icon_emoji": "",
+    }
+
+    encoded_msg = json.dumps(msg).encode("utf-8")
+    resp = http.request("POST", url, body=encoded_msg)
+    print(
+        {
+            "message": event["Records"][0]["Sns"]["Message"],
+            "status_code": resp.status,
+            "response": resp.data,
+        }
+    )
+```
+
+The `SLACK_WEBHOOK_URL`, `SLACK_CHANNEL`, `SLACK_USERNAME`, and `SLACK_EMOJI` environment variables are always set by the module and available to your function.
+
+## Deploy a custom function
+
+<Steps>
+  <Step title="Write your custom Lambda handler">
+    Create a Python file with a `lambda_handler(event, context)` function. The file name (without the `.py` extension) becomes the handler module name. Place it anywhere accessible from your Terraform root module.
+  </Step>
+
+  <Step title="Reference the file with lambda_source_path">
+    Pass the path to your file using `lambda_source_path`. The path is relative to your Terraform root module (where you run `terraform apply`).
+
+    ```hcl
+    resource "aws_sns_topic" "custom" {
+      name = "custom-lambda-topic"
+    }
+
+    module "custom_lambda" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      lambda_function_name = "custom_lambda"
+      lambda_source_path   = "functions/mylambda.py"
+
+      iam_role_name_prefix = "custom"
+
+      sns_topic_name   = aws_sns_topic.custom.name
+      create_sns_topic = false
+
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "aws-notification"
+      slack_username    = "reporter"
+    }
+    ```
+  </Step>
+
+  <Step title="Handle multiple functions sharing the same source path">
+    If you deploy multiple module instances from the same source file, the module uses a hash of the source path to name the deployment package. Because both instances share the same path, they would produce the same hash and conflict.
+
+    Use `hash_extra` to add a unique string to the hash for each instance:
+
+    ```hcl
+    module "notify_slack_dev" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      lambda_function_name = "notify_slack_dev"
+      lambda_source_path   = "functions/mylambda.py"
+      hash_extra           = "dev"
+
+      sns_topic_name    = "slack-topic-dev"
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "dev-alerts"
+      slack_username    = "reporter"
+    }
+
+    module "notify_slack_prod" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      lambda_function_name = "notify_slack_prod"
+      lambda_source_path   = "functions/mylambda.py"
+      hash_extra           = "prod"
+
+      sns_topic_name    = "slack-topic-prod"
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "prod-alerts"
+      slack_username    = "reporter"
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  When `lambda_source_path` is `null` (the default), the module uses its own bundled `functions/notify_slack.py`. You only need to set `lambda_source_path` when you want to override the default handler.
+</Note>

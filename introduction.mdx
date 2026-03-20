@@ -1,0 +1,84 @@
+---
+title: "Introduction"
+description: "Learn what the terraform-aws-notify-slack module does and which AWS event types it supports."
+---
+
+The `terraform-aws-notify-slack` module creates an SNS topic (or subscribes to an existing one) and an AWS Lambda function that forwards notifications to a Slack channel using Slack's [incoming webhooks API](https://api.slack.com/incoming-webhooks).
+
+When an AWS service publishes a message to the SNS topic, the Lambda function (Python 3.13) parses the event payload, formats it into a Slack message, and sends it to the configured channel via your webhook URL.
+
+<Note>
+  Before you deploy this module, you need a Slack incoming webhook URL. Create one at [my.slack.com/services/new/incoming-webhook](https://my.slack.com/services/new/incoming-webhook/) and keep it secure — treat it like a password.
+</Note>
+
+## What the module creates
+
+By default the module provisions:
+
+- An **SNS topic** with an optional KMS encryption key
+- An **AWS Lambda function** (Python 3.13) subscribed to the topic
+- The **IAM role and policy** the Lambda function needs to run and write CloudWatch logs
+- A **CloudWatch log group** for Lambda execution logs
+
+You can point the module at an existing SNS topic instead of creating a new one by setting `create_sns_topic = false`.
+
+## Supported event types
+
+The Lambda function recognises and formats the following AWS event types before sending them to Slack:
+
+<CardGroup cols={2}>
+  <Card title="CloudWatch Alarms" icon="bell">
+    Metric alarms and LogMetrics alarms from Amazon CloudWatch.
+  </Card>
+  <Card title="GuardDuty Findings" icon="shield">
+    Threat-intelligence findings produced by Amazon GuardDuty.
+  </Card>
+  <Card title="GuardDuty Malware Scan" icon="virus">
+    Object scan results from GuardDuty Malware Protection.
+  </Card>
+  <Card title="Security Hub" icon="lock">
+    Findings aggregated by AWS Security Hub.
+  </Card>
+  <Card title="AWS Health" icon="heart-pulse">
+    Service health events and scheduled maintenance notices.
+  </Card>
+  <Card title="AWS Backup" icon="database">
+    Backup job status and vault notifications.
+  </Card>
+  <Card title="Generic messages" icon="message">
+    Any plain-text or JSON message published directly to the SNS topic.
+  </Card>
+</CardGroup>
+
+## Basic usage
+
+Add the module block to your Terraform configuration and supply the four required variables:
+
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+}
+```
+
+## Key configuration options
+
+| Variable | Required | Description |
+|---|---|---|
+| `sns_topic_name` | Yes | Name for the SNS topic to create (or subscribe to). |
+| `slack_webhook_url` | Yes | Slack incoming webhook URL. |
+| `slack_channel` | Yes | Slack channel name that receives notifications. |
+| `slack_username` | Yes | Display name for the bot posting messages. |
+| `create_sns_topic` | No | Set to `false` to use an existing topic instead of creating one. |
+| `kms_key_arn` | No | KMS key ARN used to decrypt an encrypted webhook URL stored as a ciphertext. |
+| `sns_topic_kms_key_id` | No | KMS key ARN for server-side encryption of the SNS topic. |
+| `lambda_function_vpc_subnet_ids` | No | Deploy the Lambda function inside a VPC by providing subnet IDs. |
+| `lambda_function_vpc_security_group_ids` | No | Security groups to attach when the function runs inside a VPC. |
+
+Ready to deploy? Follow the [Quickstart](/quickstart) to go from zero to notifications in minutes.

@@ -1,0 +1,89 @@
+---
+title: "AWS Backup notifications"
+description: "How the module detects and formats AWS Backup job notifications into Slack messages."
+---
+
+The Lambda function detects AWS Backup notifications by checking whether the SNS message **Subject** is exactly `"Notification from AWS Backup"`. When this subject is present, the message body is parsed for backup job details.
+
+## Message parsing
+
+AWS Backup sends free-text messages rather than structured JSON. The module extracts three fields using regex patterns:
+
+| Field               | Regex pattern used                    |
+|---------------------|---------------------------------------|
+| BackupJob ID        | `(BackupJob ID : ).*`                 |
+| Resource ARN        | `(Resource ARN : ).*[.]`             |
+| Recovery point ARN  | `(Recovery point ARN: ).*[.]`        |
+
+Each matched value has its trailing period removed before display.
+
+## Slack message title
+
+The title is taken from the first sentence of the message body (everything before the first `.`). The module then prepends an emoji based on the job outcome:
+
+- If the title contains `"completed"` → prefixed with `✅`
+- If the title contains `"failed"` → prefixed with `⚠️`
+
+## Setting up AWS Backup to publish to the SNS topic
+
+You configure notifications at the AWS Backup vault level. The vault publishes job events to an SNS topic, which you point at the same topic the module manages.
+
+<Steps>
+  <Step title="Grant AWS Backup permission to publish to the SNS topic">
+    Add a resource-based policy to the SNS topic that allows the Backup service to publish:
+
+    ```hcl
+    resource "aws_sns_topic_policy" "allow_backup" {
+      arn = module.notify_slack.slack_topic_arn
+
+      policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [{
+          Effect    = "Allow"
+          Principal = { Service = "backup.amazonaws.com" }
+          Action    = "SNS:Publish"
+          Resource  = module.notify_slack.slack_topic_arn
+        }]
+      })
+    }
+    ```
+  </Step>
+  <Step title="Create a Backup vault with SNS notifications">
+    ```hcl
+    resource "aws_backup_vault" "example" {
+      name = "example-backup-vault"
+    }
+
+    resource "aws_backup_vault_notifications" "example" {
+      backup_vault_name   = aws_backup_vault.example.name
+      sns_topic_arn       = module.notify_slack.slack_topic_arn
+
+      backup_vault_events = [
+        "BACKUP_JOB_COMPLETED",
+        "BACKUP_JOB_FAILED",
+        "RESTORE_JOB_COMPLETED",
+        "RESTORE_JOB_FAILED",
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Create a Backup plan that uses the vault">
+    ```hcl
+    resource "aws_backup_plan" "example" {
+      name = "example-backup-plan"
+
+      rule {
+        rule_name         = "daily-backup"
+        target_vault_name = aws_backup_vault.example.name
+        schedule          = "cron(0 3 * * ? *)"
+
+        lifecycle {
+          delete_after = 30
+        }
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>The SNS subject `"Notification from AWS Backup"` is set automatically by the Backup service. You do not need to configure this manually.</Note>

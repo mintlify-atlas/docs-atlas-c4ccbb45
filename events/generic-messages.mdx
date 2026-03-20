@@ -1,0 +1,104 @@
+---
+title: "Generic messages"
+description: "The default fallback formatter handles any SNS message that does not match a known event type."
+---
+
+When the Lambda function receives an SNS message that does not match any known event type (CloudWatch alarm, GuardDuty finding, Security Hub finding, AWS Health event, or AWS Backup notification), it falls back to the default formatter.
+
+## How the formatter works
+
+The formatter has two distinct code paths depending on the structure of the incoming message.
+
+### Pass-through: messages with `attachments` or `text`
+
+If the parsed JSON message already contains an `attachments` or `text` key at the top level, the payload is merged directly into the Slack request without any further processing. This lets you publish a fully-formed Slack message payload to SNS and have it forwarded as-is.
+
+```json
+{
+  "text": "Deployment to production completed successfully.",
+  "attachments": [
+    {
+      "color": "good",
+      "title": "Deploy #42",
+      "text": "Deployed commit `abc1234` to *production* in 3m 12s."
+    }
+  ]
+}
+```
+
+Publish this to the SNS topic:
+
+```bash
+aws sns publish \
+  --topic-arn arn:aws:sns:us-east-1:123456789012:notify-slack \
+  --message '{
+    "text": "Deployment to production completed successfully.",
+    "attachments": [{
+      "color": "good",
+      "title": "Deploy #42",
+      "text": "Deployed commit `abc1234` to *production* in 3m 12s."
+    }]
+  }'
+```
+
+### Key-value fields: arbitrary JSON objects
+
+If the message is a JSON object that does not contain `attachments` or `text`, each key-value pair is rendered as a separate field in the Slack attachment.
+
+String values shorter than 25 characters are displayed inline (side by side). Longer values are displayed on their own line. Dict and list values are JSON-serialized before display.
+
+```bash
+aws sns publish \
+  --topic-arn arn:aws:sns:us-east-1:123456789012:notify-slack \
+  --subject "Deployment event" \
+  --message '{
+    "environment": "production",
+    "version": "1.4.2",
+    "deployed_by": "ci-bot",
+    "commit": "abc1234"
+  }'
+```
+
+The `subject` value is used as the Slack attachment title when provided.
+
+### Plain text strings
+
+If the message body is not valid JSON, the Lambda treats it as a plain text string and renders it as a single field value.
+
+```bash
+aws sns publish \
+  --topic-arn arn:aws:sns:us-east-1:123456789012:notify-slack \
+  --message "Nightly database backup completed in 14 minutes."
+```
+
+## Routing specific message types with filter policies
+
+If you publish multiple message types to the same SNS topic, you can use SNS subscription filter policies to control which messages the Lambda receives.
+
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 6.0"
+
+  slack_webhook_url = var.slack_webhook_url
+  slack_channel     = "#alerts"
+  slack_username    = "aws-notify"
+
+  subscription_filter_policy = jsonencode({
+    event_type = ["alert", "warning"]
+  })
+}
+```
+
+With this filter in place, only SNS messages that include a `event_type` message attribute with the value `alert` or `warning` are delivered to the Lambda. Other messages are dropped before they reach the function.
+
+<Tip>
+Use message attributes when publishing to SNS to enable filter policies:
+
+```bash
+aws sns publish \
+  --topic-arn arn:aws:sns:us-east-1:123456789012:notify-slack \
+  --message '{"status": "degraded", "service": "api-gateway"}' \
+  --message-attributes '{"event_type":{"DataType":"String","StringValue":"alert"}}'
+```
+</Tip>

@@ -1,0 +1,252 @@
+---
+title: "Input variables"
+description: "Complete reference for all input variables accepted by the terraform-aws-notify-slack module."
+---
+
+## Required
+
+These variables have no default values and must be set in every module call.
+
+<ParamField path="sns_topic_name" type="string" required>
+  The name of the SNS topic to create or reference.
+</ParamField>
+
+<ParamField path="slack_webhook_url" type="string" required>
+  The Slack incoming webhook URL. If the URL is KMS-encrypted, provide the base64-encoded ciphertext and set `kms_key_arn`.
+</ParamField>
+
+<ParamField path="slack_channel" type="string" required>
+  The name of the Slack channel that receives notifications (for example, `#alerts`).
+</ParamField>
+
+<ParamField path="slack_username" type="string" required>
+  The display name that appears on Slack messages posted by the bot.
+</ParamField>
+
+---
+
+## General
+
+<ParamField path="create" type="boolean" default="true">
+  Whether to create all module resources. Set to `false` to disable the entire module without removing it from your configuration.
+</ParamField>
+
+<ParamField path="tags" type="map(string)" default="{}">
+  A map of tags to add to all resources created by this module.
+</ParamField>
+
+---
+
+## Slack settings
+
+<ParamField path="slack_emoji" type="string" default=":aws:">
+  A custom emoji that appears as the bot icon on Slack messages.
+</ParamField>
+
+<ParamField path="log_events" type="boolean" default="false">
+  When `true`, the Lambda function logs the full incoming event payload to CloudWatch at the `INFO` level. Useful for debugging, but increases log volume.
+</ParamField>
+
+<ParamField path="log_level" type="string" default="INFO">
+  Logging level for the Lambda function. Valid values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`.
+</ParamField>
+
+---
+
+## SNS topic
+
+<ParamField path="create_sns_topic" type="boolean" default="true">
+  Whether to create a new SNS topic. Set to `false` when you want to subscribe the Lambda function to an existing topic identified by `sns_topic_name`.
+</ParamField>
+
+<ParamField path="sns_topic_kms_key_id" type="string" default='""'>
+  ARN of the KMS key used to enable server-side encryption (SSE) on the SNS topic.
+</ParamField>
+
+<ParamField path="enable_sns_topic_delivery_status_logs" type="boolean" default="false">
+  Whether to enable SNS delivery status logging for Lambda deliveries. When enabled, success and failure delivery attempts are logged to CloudWatch using an IAM feedback role.
+</ParamField>
+
+<ParamField path="sns_topic_lambda_feedback_role_arn" type="string" default='""'>
+  ARN of an existing IAM role to use for SNS delivery status logging. When set, the module does not create a new feedback role.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_name" type="string" default="null">
+  Name of the IAM role created for SNS delivery status logging. Only used when `enable_sns_topic_delivery_status_logs = true` and no existing role ARN is provided.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_description" type="string" default="null">
+  Description of the IAM role used for SNS delivery status logging.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_path" type="string" default="null">
+  IAM path for the SNS feedback role.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_force_detach_policies" type="boolean" default="true">
+  Whether to force-detach any policies from the SNS feedback IAM role before destroying it.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_permissions_boundary" type="string" default="null">
+  ARN of a permissions boundary policy to attach to the SNS feedback IAM role.
+</ParamField>
+
+<ParamField path="sns_topic_feedback_role_tags" type="map(string)" default="{}">
+  Additional tags to assign to the SNS topic feedback IAM role.
+</ParamField>
+
+<ParamField path="sns_topic_lambda_feedback_sample_rate" type="number" default="100">
+  Percentage of successful Lambda deliveries to log. Accepts values from `0` to `100`.
+</ParamField>
+
+<ParamField path="sns_topic_tags" type="map(string)" default="{}">
+  Additional tags for the SNS topic, merged with `tags`.
+</ParamField>
+
+---
+
+## Lambda function
+
+<ParamField path="lambda_function_name" type="string" default="notify_slack">
+  The name given to the Lambda function.
+</ParamField>
+
+<ParamField path="lambda_description" type="string" default="null">
+  A description for the Lambda function, visible in the AWS console.
+</ParamField>
+
+<ParamField path="lambda_source_path" type="string" default="null">
+  Path to a custom Lambda function source file, relative to your Terraform root module. When `null`, the bundled `functions/notify_slack.py` is used.
+</ParamField>
+
+<ParamField path="runtime" type="string" default="python3.13">
+  The Lambda runtime identifier. Defaults to `python3.13`.
+</ParamField>
+
+<ParamField path="architectures" type="list(string)" default="null">
+  Instruction set architecture for the Lambda function. Valid values are `["x86_64"]` and `["arm64"]`.
+</ParamField>
+
+<ParamField path="reserved_concurrent_executions" type="number" default="-1">
+  The number of reserved concurrent executions for the Lambda function. `0` disables invocations; `-1` removes concurrency limits.
+</ParamField>
+
+<ParamField path="lambda_function_ephemeral_storage_size" type="number" default="512">
+  Amount of ephemeral `/tmp` storage in MB available to the Lambda function at runtime. Valid range is 512–10240 MB.
+</ParamField>
+
+<ParamField path="lambda_function_tags" type="map(string)" default="{}">
+  Additional tags for the Lambda function, merged with `tags`.
+</ParamField>
+
+<ParamField path="recreate_missing_package" type="boolean" default="true">
+  Whether to recreate the Lambda deployment package if it is missing locally.
+</ParamField>
+
+<ParamField path="hash_extra" type="string" default='""'>
+  An extra string added to the hash used for the Lambda deployment package. Useful when building the same source path for multiple functions.
+</ParamField>
+
+<ParamField path="trigger_on_package_timestamp" type="boolean" default="false">
+  When `false`, the file timestamp is ignored when deciding whether to recreate the deployment archive.
+</ParamField>
+
+---
+
+## Lambda networking
+
+<Tip>
+  Both `lambda_function_vpc_subnet_ids` and `lambda_function_vpc_security_group_ids` must be set together to place the Lambda function inside a VPC. The module automatically attaches the required `AWSLambdaVPCAccessExecutionRole` policy when subnets are provided.
+</Tip>
+
+<ParamField path="lambda_function_vpc_subnet_ids" type="list(string)" default="null">
+  List of subnet IDs the Lambda function should run in. Use private or intra subnets to keep traffic inside the VPC.
+</ParamField>
+
+<ParamField path="lambda_function_vpc_security_group_ids" type="list(string)" default="null">
+  List of security group IDs to associate with the Lambda function when running inside a VPC.
+</ParamField>
+
+---
+
+## Lambda IAM
+
+<ParamField path="lambda_role" type="string" default='""'>
+  ARN of an existing IAM role to attach to the Lambda function. When set, the module does not create a new role.
+</ParamField>
+
+<ParamField path="iam_role_name_prefix" type="string" default="lambda">
+  Prefix for the generated IAM role name. The full name is `{prefix}-{lambda_function_name}`.
+</ParamField>
+
+<ParamField path="iam_role_path" type="string" default="null">
+  IAM path for the Lambda execution role.
+</ParamField>
+
+<ParamField path="iam_role_boundary_policy_arn" type="string" default="null">
+  ARN of a permissions boundary policy to attach to the Lambda execution role.
+</ParamField>
+
+<ParamField path="iam_role_tags" type="map(string)" default="{}">
+  Additional tags for the Lambda IAM role.
+</ParamField>
+
+---
+
+## Lambda storage
+
+<ParamField path="lambda_function_store_on_s3" type="boolean" default="false">
+  Whether to upload the Lambda deployment package to S3 rather than storing it locally.
+</ParamField>
+
+<ParamField path="lambda_function_s3_bucket" type="string" default="null">
+  Name of the S3 bucket used to store the Lambda deployment artifact. Required when `lambda_function_store_on_s3 = true`.
+</ParamField>
+
+---
+
+## Lambda dead letter
+
+<ParamField path="lambda_dead_letter_target_arn" type="string" default="null">
+  ARN of an SNS topic or SQS queue to notify when a Lambda invocation fails after all retries are exhausted.
+</ParamField>
+
+<ParamField path="lambda_attach_dead_letter_policy" type="boolean" default="false">
+  Whether to attach an IAM policy granting the Lambda role permission to send to the dead letter target.
+</ParamField>
+
+---
+
+## Encryption
+
+<ParamField path="kms_key_arn" type="string" default='""'>
+  ARN of the KMS key used to decrypt an encrypted Slack webhook URL. When set, `kms:Decrypt` is added to the Lambda execution role policy.
+</ParamField>
+
+<ParamField path="cloudwatch_log_group_kms_key_id" type="string" default="null">
+  ARN of the KMS key used to encrypt log data in the Lambda CloudWatch log group.
+</ParamField>
+
+---
+
+## CloudWatch
+
+<ParamField path="cloudwatch_log_group_retention_in_days" type="number" default="0">
+  Number of days to retain log events in the Lambda log group. `0` means logs are retained indefinitely.
+</ParamField>
+
+<ParamField path="cloudwatch_log_group_tags" type="map(string)" default="{}">
+  Additional tags for the CloudWatch log group, merged with `tags`.
+</ParamField>
+
+---
+
+## Subscription filter
+
+<ParamField path="subscription_filter_policy" type="string" default="null">
+  A valid SNS filter policy JSON string. When set, only messages matching this policy are delivered to the Lambda function.
+</ParamField>
+
+<ParamField path="subscription_filter_policy_scope" type="string" default="null">
+  The scope of the filter policy. Valid values are `MessageAttributes` and `MessageBody`.
+</ParamField>

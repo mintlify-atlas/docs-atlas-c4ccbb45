@@ -1,0 +1,70 @@
+---
+title: "Output values"
+description: "Complete reference for all values exported by the terraform-aws-notify-slack module."
+---
+
+## SNS
+
+<ResponseField name="slack_topic_arn" type="string">
+  The ARN of the SNS topic from which messages are sent to Slack. This is the primary output to use when you need to publish messages to the notification pipeline.
+</ResponseField>
+
+<ResponseField name="this_slack_topic_arn" type="string" deprecated>
+  The ARN of the SNS topic from which messages are sent to Slack.
+
+  <Warning>
+    This output is provided for backward compatibility with module version 4.x and will be removed in the next major release (v5.x). Use `slack_topic_arn` instead.
+  </Warning>
+</ResponseField>
+
+---
+
+## Lambda
+
+<ResponseField name="notify_slack_lambda_function_arn" type="string">
+  The ARN of the Lambda function created by this module.
+</ResponseField>
+
+<ResponseField name="notify_slack_lambda_function_name" type="string">
+  The name of the Lambda function created by this module.
+</ResponseField>
+
+<ResponseField name="notify_slack_lambda_function_invoke_arn" type="string">
+  The invocation ARN of the Lambda function. Use this when granting API Gateway or other services permission to invoke the function.
+</ResponseField>
+
+<ResponseField name="notify_slack_lambda_function_last_modified" type="string">
+  The date and time the Lambda function was last modified, in ISO-8601 format.
+</ResponseField>
+
+<ResponseField name="notify_slack_lambda_function_version" type="string">
+  The latest published version number of the Lambda function. Publishing is always enabled by this module.
+</ResponseField>
+
+---
+
+## IAM
+
+<ResponseField name="lambda_iam_role_arn" type="string">
+  The ARN of the IAM role attached to the Lambda function.
+</ResponseField>
+
+<ResponseField name="lambda_iam_role_name" type="string">
+  The name of the IAM role attached to the Lambda function.
+</ResponseField>
+
+<ResponseField name="sns_topic_feedback_role_arn" type="string">
+  The ARN of the IAM role used for SNS delivery status logging. Returns the ARN of the role created by this module, or the value of `sns_topic_lambda_feedback_role_arn` if you supplied an existing role.
+
+  <Note>
+    This output is an empty string when `enable_sns_topic_delivery_status_logs = false` and no existing role ARN was provided.
+  </Note>
+</ResponseField>
+
+---
+
+## CloudWatch
+
+<ResponseField name="lambda_cloudwatch_log_group_arn" type="string">
+  The Amazon Resource Name (ARN) of the CloudWatch log group created for the Lambda function. Returns an empty string when `create = false`.
+</ResponseField>

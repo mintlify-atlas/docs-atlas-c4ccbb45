@@ -1,0 +1,230 @@
+---
+title: "Simple Slack notifications"
+description: "Basic end-to-end example that creates an SNS topic and wires it to a Slack channel using the notify-slack module."
+---
+
+This example creates an SNS topic and configures the `notify_slack` module to forward messages from that topic to a Slack channel. It does not use KMS encryption — see the [CloudWatch alerts to Slack](/examples/cloudwatch-alerts-to-slack) example if you need an encrypted webhook URL.
+
+<Note>
+This example may create AWS resources that incur costs. Run `terraform destroy` when you no longer need them.
+</Note>
+
+## How to use this example
+
+<Steps>
+  <Step title="Clone or copy the example">
+    Clone the repository and navigate to the example directory:
+
+    ```bash
+    git clone https://github.com/terraform-aws-modules/terraform-aws-notify-slack.git
+    cd terraform-aws-notify-slack/examples/notify-slack-simple
+    ```
+  </Step>
+
+  <Step title="Set your Slack webhook URL">
+    Open `main.tf` and replace the placeholder webhook URL with your real Slack incoming webhook URL:
+
+    ```hcl
+    slack_webhook_url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+    ```
+
+    Update `slack_channel` and `slack_username` to match your workspace.
+  </Step>
+
+  <Step title="Initialize Terraform">
+    ```bash
+    terraform init
+    ```
+  </Step>
+
+  <Step title="Preview the changes">
+    ```bash
+    terraform plan
+    ```
+  </Step>
+
+  <Step title="Apply the configuration">
+    ```bash
+    terraform apply
+    ```
+  </Step>
+</Steps>
+
+## main.tf
+
+```hcl
+provider "aws" {
+  region = local.region
+}
+
+locals {
+  name   = "ex-${replace(basename(path.cwd), "_", "-")}"
+  region = "eu-west-1"
+  tags = {
+    Owner       = "user"
+    Environment = "dev"
+  }
+}
+
+################################################################################
+# Supporting Resources
+################################################################################
+
+resource "aws_sns_topic" "example" {
+  name = local.name
+  tags = local.tags
+}
+
+################################################################################
+# Slack Notify Module
+################################################################################
+
+module "notify_slack" {
+  source = "../../"
+
+  sns_topic_name   = aws_sns_topic.example.name
+  create_sns_topic = false
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  tags = local.tags
+}
+
+################################################################################
+# Integration Testing Support
+# This populates a file that is gitignored to aid in executing the integration tests locally
+################################################################################
+
+resource "local_file" "integration_testing" {
+  filename = "${path.module}/../../functions/.int.env"
+  content  = <<-EOT
+    REGION=${local.region}
+    LAMBDA_FUNCTION_NAME=${module.notify_slack.notify_slack_lambda_function_name}
+    SNS_TOPIC_ARN=${aws_sns_topic.example.arn}
+    EOT
+}
+```
+
+<Tip>
+The module accepts an existing SNS topic when you set `create_sns_topic = false` and pass `sns_topic_name`. This is useful when the SNS topic is managed elsewhere in your infrastructure.
+</Tip>
+
+## Variables
+
+This example defines no input variables. All values are hard-coded in `main.tf` using `locals`.
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `region` | `eu-west-1` | AWS region where resources are deployed |
+| `slack_channel` | `aws-notification` | Slack channel to post messages to |
+| `slack_username` | `reporter` | Slack username shown as the message sender |
+
+## Outputs
+
+After applying, Terraform exposes these outputs:
+
+```hcl
+output "sns_topic_arn" {
+  description = "The ARN of the SNS topic from which messages will be sent to Slack"
+  value       = module.notify_slack.slack_topic_arn
+}
+
+output "lambda_iam_role_arn" {
+  description = "The ARN of the IAM role used by Lambda function"
+  value       = module.notify_slack.lambda_iam_role_arn
+}
+
+output "lambda_iam_role_name" {
+  description = "The name of the IAM role used by Lambda function"
+  value       = module.notify_slack.lambda_iam_role_name
+}
+
+output "notify_slack_lambda_function_arn" {
+  description = "The ARN of the Lambda function"
+  value       = module.notify_slack.notify_slack_lambda_function_arn
+}
+
+output "notify_slack_lambda_function_name" {
+  description = "The name of the Lambda function"
+  value       = module.notify_slack.notify_slack_lambda_function_name
+}
+
+output "notify_slack_lambda_function_invoke_arn" {
+  description = "The ARN to be used for invoking Lambda function from API Gateway"
+  value       = module.notify_slack.notify_slack_lambda_function_invoke_arn
+}
+
+output "notify_slack_lambda_function_last_modified" {
+  description = "The date Lambda function was last modified"
+  value       = module.notify_slack.notify_slack_lambda_function_last_modified
+}
+
+output "notify_slack_lambda_function_version" {
+  description = "Latest published version of your Lambda function"
+  value       = module.notify_slack.notify_slack_lambda_function_version
+}
+
+output "lambda_cloudwatch_log_group_arn" {
+  description = "The Amazon Resource Name (ARN) specifying the log group"
+  value       = module.notify_slack.lambda_cloudwatch_log_group_arn
+}
+```
+
+## Using a custom Lambda function
+
+The `custom-lambda.tf` file in the example shows how to supply your own Lambda function source code instead of using the built-in handler. Pass `lambda_function_name` and `lambda_source_path` to point the module at your custom Python file:
+
+```hcl
+locals {
+  custom = {
+    name = "ex-${replace(basename(path.cwd), "_", "-")}-custom"
+    tags = merge({ "Type" = "custom" }, local.tags)
+  }
+}
+
+################################################################################
+# Supporting Resources
+################################################################################
+
+resource "aws_sns_topic" "custom_lambda" {
+  name = local.custom.name
+  tags = local.custom.tags
+}
+
+################################################################################
+# Slack Notify Module
+################################################################################
+
+module "custom_lambda" {
+  source = "../../"
+
+  lambda_function_name = "custom_lambda"
+  lambda_source_path   = "../../functions/mylambda.py"
+
+  iam_role_name_prefix = "custom"
+
+  sns_topic_name = aws_sns_topic.custom_lambda.name
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  tags = local.custom.tags
+}
+```
+
+`lambda_source_path` accepts a path to a `.py` file. The module packages and deploys it automatically. Use `iam_role_name_prefix` to avoid IAM role name collisions when deploying multiple instances of the module in the same account.
+
+## Requirements
+
+| Provider | Version |
+|----------|---------|
+| Terraform | `>= 1.5.7` |
+| `hashicorp/aws` | `>= 6.28` |
+| `hashicorp/local` | `>= 2.0` |
+
+## Source
+
+View the full example on GitHub: [examples/notify-slack-simple](https://github.com/terraform-aws-modules/terraform-aws-notify-slack/tree/master/examples/notify-slack-simple)

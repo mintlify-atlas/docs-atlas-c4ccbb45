@@ -1,0 +1,139 @@
+---
+title: "Lambda function"
+description: "How the notify_slack Lambda function works, including environment variables, Python functions, and event detection logic."
+---
+
+The module ships a Python Lambda function at `functions/notify_slack.py`. The function receives SNS events, parses the notification payload, formats a Slack message, and delivers it via an incoming webhook.
+
+## Runtime and entry point
+
+- **Runtime:** Python 3.13 (configurable via `var.runtime`)
+- **Handler:** `notify_slack.lambda_handler`
+- **Timeout:** 30 seconds
+- **Publishing:** Always enabled (`publish = true`)
+- **Log group:** Pre-created by the module; the function writes to `/aws/lambda/{function_name}`
+
+<Note>
+  You can replace the built-in function with a custom one by setting `lambda_source_path` to the path of your own `.py` file. The handler is derived automatically from the filename: a file named `my_handler.py` becomes `my_handler.lambda_handler`.
+</Note>
+
+---
+
+## Environment variables
+
+The module passes the following environment variables to the Lambda function from your Terraform variable values.
+
+| Variable | Source variable | Default | Description |
+|---|---|---|---|
+| `SLACK_WEBHOOK_URL` | `var.slack_webhook_url` | — | Slack incoming webhook URL, plain or KMS-encrypted |
+| `SLACK_CHANNEL` | `var.slack_channel` | — | Target Slack channel |
+| `SLACK_USERNAME` | `var.slack_username` | — | Bot display name in Slack |
+| `SLACK_EMOJI` | `var.slack_emoji` | `:aws:` | Bot icon emoji |
+| `LOG_EVENTS` | `var.log_events` | `False` | Set to `True` to log the full incoming event to CloudWatch |
+| `LOG_LEVEL` | `var.log_level` | `INFO` | Python logging level |
+
+<Tip>
+  If `SLACK_WEBHOOK_URL` does not start with `http`, the function assumes it is a KMS-encrypted base64 string and calls `decrypt_url()` before posting to Slack. Make sure `kms_key_arn` is set and the Lambda role has `kms:Decrypt` permission.
+</Tip>
+
+---
+
+## Key Python functions
+
+### `lambda_handler(event, context)`
+
+Entry point invoked by AWS Lambda. Iterates over every SNS record in the event, extracts the subject and message, derives the source AWS region from the topic ARN, and delegates to `get_slack_message_payload()` and `send_slack_notification()`.
+
+```python
+def lambda_handler(event: Dict[str, Any], context: Dict[str, Any]) -> str:
+    if os.environ.get("LOG_EVENTS", "False") == "True":
+        logging.info("Event logging enabled: %s", json.dumps(event))
+
+    for record in event["Records"]:
+        sns = record["Sns"]
+        subject = sns["Subject"]
+        message = sns["Message"]
+        region = sns["TopicArn"].split(":")[3]
+
+        payload = get_slack_message_payload(message=message, region=region, subject=subject)
+        response = send_slack_notification(payload=payload)
+```
+
+### `get_slack_message_payload(message, region, subject)`
+
+Builds the top-level Slack payload (channel, username, icon) and decides how to format the notification body.
+
+- If the message string is valid JSON, it is parsed into a dict.
+- If the parsed dict already contains `attachments` or `text` keys, it is passed through unchanged — this lets callers supply pre-formatted Slack messages.
+- Otherwise, `parse_notification()` is called to detect the event type and format accordingly.
+
+### `parse_notification(message, subject, region)`
+
+Detects the event type and dispatches to the appropriate formatter. The detection order is:
+
+```python
+if "AlarmName" in message:
+    return format_cloudwatch_alarm(message, region)
+if message.get("detail-type") == "GuardDuty Finding":
+    return format_guardduty_finding(message, region=message["region"])
+if message.get("detail-type") == "GuardDuty Malware Protection Object Scan Result":
+    return format_guardduty_malware_protection_object_scan_result(message, region=message["region"])
+if message.get("detail-type") == "Security Hub Findings - Imported":
+    return format_aws_security_hub(message, region=message["region"])
+if message.get("detail-type") == "AWS Health Event":
+    return format_aws_health(message, region=message["region"])
+if subject == "Notification from AWS Backup":
+    return format_aws_backup(str(message))
+return format_default(message, subject)
+```
+
+### `send_slack_notification(payload)`
+
+Sends an HTTP POST to the Slack webhook URL using Python's built-in `urllib.request`. If the URL does not start with `http`, it is first decrypted with `decrypt_url()`. Returns a JSON string containing the HTTP status code and response headers.
+
+### `decrypt_url(encrypted_url)`
+
+Decrypts a KMS-encrypted webhook URL. The function expects `encrypted_url` to be a base64-encoded KMS ciphertext blob. The KMS client is created at module load time so that it is cached between Lambda invocations.
+
+```python
+def decrypt_url(encrypted_url: str) -> str:
+    decrypted_payload = KMS_CLIENT.decrypt(
+        CiphertextBlob=base64.b64decode(encrypted_url)
+    )
+    return decrypted_payload["Plaintext"].decode()
+```
+
+---
+
+## Event formatters
+
+Each supported event type has a dedicated formatter that converts the SNS message body into a Slack `attachments` payload.
+
+| Event type | `detail-type` / detection | Formatter function |
+|---|---|---|
+| CloudWatch alarm | `"AlarmName"` key present | `format_cloudwatch_alarm()` |
+| GuardDuty finding | `"GuardDuty Finding"` | `format_guardduty_finding()` |
+| GuardDuty malware scan | `"GuardDuty Malware Protection Object Scan Result"` | `format_guardduty_malware_protection_object_scan_result()` |
+| Security Hub finding | `"Security Hub Findings - Imported"` | `format_aws_security_hub()` |
+| AWS Health event | `"AWS Health Event"` | `format_aws_health()` |
+| AWS Backup notification | SNS subject `"Notification from AWS Backup"` | `format_aws_backup()` |
+| All other messages | Fallback | `format_default()` |
+
+### Severity-to-colour mapping
+
+Formatters use Python enums to map severity levels to Slack attachment colour bars.
+
+| Enum | Values |
+|---|---|
+| `CloudWatchAlarmState` | `OK` → `good`, `INSUFFICIENT_DATA` → `warning`, `ALARM` → `danger` |
+| `GuardDutyFindingSeverity` | `Low` → `#777777`, `Medium` → `warning`, `High` → `danger` |
+| `SecurityHubSeverity` | `CRITICAL`/`HIGH` → `danger`, `MEDIUM` → `warning`, `LOW` → `#777777`, `INFORMATIONAL` → `#439FE0` |
+| `AwsHealthCategory` | `issue` → `danger`, `scheduledChange` → `warning`, `accountNotification` → `#777777` |
+
+### Security Hub workflow update
+
+When processing a Security Hub finding, if the compliance status is `FAILED` and the workflow status is `NEW`, the function calls `securityhub:BatchUpdateFindings` to update the workflow status to `NOTIFIED`. This prevents the same finding from generating repeated Slack messages.
+
+<Note>
+  This behaviour is why the Lambda execution role always receives `securityhub:BatchUpdateFindings` permission, regardless of whether you use Security Hub.
+</Note>

@@ -1,0 +1,170 @@
+---
+title: "GuardDuty findings"
+description: "How the module detects and formats GuardDuty findings and Malware Protection scan results into Slack notifications."
+---
+
+The Lambda function handles two GuardDuty event types, detected by the `detail-type` field in the EventBridge event.
+
+## GuardDuty findings
+
+Detected when `detail-type == "GuardDuty Finding"`.
+
+### Severity mapping
+
+The numeric severity score from the finding maps to a label and Slack color via the `GuardDutyFindingSeverity` enum:
+
+| Severity score | Label    | Slack color  | Appearance |
+|---------------|----------|-------------|------------|
+| < 4.0         | `Low`    | `#777777`   | Gray       |
+| 4.0 – 6.9     | `Medium` | `warning`   | Yellow     |
+| ≥ 7.0         | `High`   | `danger`    | Red        |
+
+### Fields in the Slack message
+
+| Field          | Source in event                         |
+|----------------|-----------------------------------------|
+| Description    | `detail.description`                    |
+| Finding Type   | `detail.type`                           |
+| First Seen     | `detail.service.eventFirstSeen`         |
+| Last Seen      | `detail.service.eventLastSeen`          |
+| Severity       | Derived from `detail.severity` score    |
+| Account ID     | `detail.accountId`                      |
+| Count          | `detail.service.count`                  |
+| Link to Finding| Direct link to the finding in the GuardDuty console |
+
+### Example event payload
+
+<Tabs>
+  <Tab title="High severity (≥ 7.0)">
+    ```json
+    {
+      "detail-type": "GuardDuty Finding",
+      "region": "us-east-1",
+      "detail": {
+        "id": "sample-id-2",
+        "title": "SAMPLE Unprotected port on EC2 instance i-123123123 is being probed",
+        "severity": 9,
+        "accountId": "123456789",
+        "description": "EC2 instance has an unprotected port which is being probed by a known malicious host.",
+        "type": "Recon:EC2 PortProbeUnprotectedPort",
+        "service": {
+          "eventFirstSeen": "2020-01-02T01:02:03Z",
+          "eventLastSeen": "2020-01-03T01:02:03Z",
+          "count": 1234
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Medium severity (4.0 – 6.9)">
+    ```json
+    {
+      "detail-type": "GuardDuty Finding",
+      "region": "us-east-1",
+      "detail": {
+        "id": "sample-id-2",
+        "title": "SAMPLE Unprotected port on EC2 instance i-123123123 is being probed",
+        "severity": 5,
+        "accountId": "123456789",
+        "description": "EC2 instance has an unprotected port which is being probed by a known malicious host.",
+        "type": "Recon:EC2 PortProbeUnprotectedPort",
+        "service": {
+          "eventFirstSeen": "2020-01-02T01:02:03Z",
+          "eventLastSeen": "2020-01-03T01:02:03Z",
+          "count": 1234
+        }
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Low severity (< 4.0)">
+    ```json
+    {
+      "detail-type": "GuardDuty Finding",
+      "region": "us-east-1",
+      "detail": {
+        "id": "sample-id-2",
+        "title": "SAMPLE Unprotected port on EC2 instance i-123123123 is being probed",
+        "severity": 2,
+        "accountId": "123456789",
+        "description": "EC2 instance has an unprotected port which is being probed by a known malicious host.",
+        "type": "Recon:EC2 PortProbeUnprotectedPort",
+        "service": {
+          "eventFirstSeen": "2020-01-02T01:02:03Z",
+          "eventLastSeen": "2020-01-03T01:02:03Z",
+          "count": 1234
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## GuardDuty Malware Protection object scan results
+
+Detected when `detail-type == "GuardDuty Malware Protection Object Scan Result"`.
+
+These events are generated when GuardDuty scans an S3 object for malware.
+
+### Scan result status and severity
+
+| `scanResultStatus`  | Severity | Slack color |
+|---------------------|----------|-------------|
+| `NO_THREATS_FOUND`  | Low      | `#777777`   |
+| `THREATS_FOUND`     | High     | `danger`    |
+| `UNSUPPORTED`       | Medium   | `warning`   |
+| `ACCESS_DENIED`     | Medium   | `warning`   |
+| `FAILED`            | Medium   | `warning`   |
+
+### Fields in the Slack message
+
+| Field           | Source in event                              |
+|-----------------|----------------------------------------------|
+| S3 Bucket       | `detail.s3ObjectDetails.bucketName`          |
+| S3 Object       | `detail.s3ObjectDetails.objectKey`           |
+| Link to S3 object | Direct link to the object in the S3 console |
+
+---
+
+## Setting up EventBridge to forward findings
+
+Create an EventBridge rule that matches GuardDuty events and delivers them to the SNS topic.
+
+```hcl
+resource "aws_cloudwatch_event_rule" "guardduty_findings" {
+  name        = "forward-guardduty-findings"
+  description = "Forward GuardDuty findings to Slack"
+
+  event_pattern = jsonencode({
+    source      = ["aws.guardduty"]
+    detail-type = [
+      "GuardDuty Finding",
+      "GuardDuty Malware Protection Object Scan Result"
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "guardduty_findings_sns" {
+  rule      = aws_cloudwatch_event_rule.guardduty_findings.name
+  target_id = "SendToSNS"
+  arn       = module.notify_slack.slack_topic_arn
+}
+
+resource "aws_sns_topic_policy" "allow_eventbridge" {
+  arn = module.notify_slack.slack_topic_arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "SNS:Publish"
+      Resource  = module.notify_slack.slack_topic_arn
+    }]
+  })
+}
+```
+
+<Note>You must grant EventBridge permission to publish to the SNS topic. The `aws_sns_topic_policy` resource above adds that permission.</Note>

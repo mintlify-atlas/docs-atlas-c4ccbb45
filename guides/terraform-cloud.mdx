@@ -1,0 +1,56 @@
+---
+title: "Terraform Cloud agents"
+description: "Build a custom tfc-agent image with Python 3.11+ support to run the notify-slack module in Terraform Cloud agent pools."
+---
+
+Terraform Cloud Agents let you run Terraform operations on your own infrastructure rather than on Terraform Cloud's shared runners. This is useful when your Terraform code needs to reach private resources, or when you need to control the execution environment.
+
+<Note>
+  Terraform Cloud Agents are a paid feature, available as part of the Terraform Cloud **Business** tier. They are not available on the Free or Plus plans.
+</Note>
+
+## Why a custom agent image is needed
+
+The default `hashicorp/tfc-agent` image does not include Python. The notify-slack module uses the `terraform-aws-modules/lambda/aws` submodule to package the Lambda function, which requires Python to be available in the environment where `terraform apply` runs. The module defaults to `runtime = "python3.13"`, but the packaging step requires Python 3.11 or later to be present on the agent.
+
+## Build a custom tfc-agent image
+
+Create a `Dockerfile` that extends the official `tfc-agent` image and installs Python 3.11:
+
+```dockerfile
+FROM hashicorp/tfc-agent:latest
+RUN apt-get -y update && apt-get -y install python3.11 python3-pip
+ENTRYPOINT ["/bin/tfc-agent"]
+```
+
+Build and push the image to a container registry accessible to your agent infrastructure:
+
+```bash
+docker build -t my-registry/tfc-agent-python:latest .
+docker push my-registry/tfc-agent-python:latest
+```
+
+Then configure your agent pool to use this image when running agents.
+
+## Override the Python runtime version
+
+The Lambda function runtime defaults to `python3.13`. If your agent only has Python 3.11 installed, the packaging step will still succeed because the packaging tool (`pip`) installs dependencies for the target runtime rather than executing the function locally. The `runtime` variable controls the Lambda execution environment in AWS, not what runs on the agent.
+
+To deploy the Lambda with a specific Python version, set the `runtime` variable:
+
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  runtime = "python3.11"
+}
+```
+
+Valid values for `runtime` are any Python runtime string supported by AWS Lambda, such as `"python3.11"`, `"python3.12"`, or `"python3.13"`.

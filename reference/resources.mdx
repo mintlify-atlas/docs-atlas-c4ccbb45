@@ -1,0 +1,132 @@
+---
+title: "AWS resources"
+description: "Every AWS resource created by the terraform-aws-notify-slack module, with conditions and IAM permissions."
+---
+
+The module creates the following AWS resources. Resources marked with a condition are only created when that condition is met.
+
+## Resource summary
+
+| Resource type | Terraform name | Condition |
+|---|---|---|
+| `aws_cloudwatch_log_group` | `lambda` | `var.create = true` |
+| `aws_sns_topic` | `this` | `var.create = true` and `var.create_sns_topic = true` |
+| `aws_sns_topic_subscription` | `sns_notify_slack` | `var.create = true` |
+| `aws_iam_role` | `sns_feedback_role` | `var.create = true`, `var.create_sns_topic = true`, `var.enable_sns_topic_delivery_status_logs = true`, and `var.sns_topic_lambda_feedback_role_arn = ""` |
+| Lambda module resources | `module.lambda` | `var.create = true` |
+
+---
+
+## CloudWatch log group
+
+**`aws_cloudwatch_log_group.lambda`**
+
+Created before the Lambda function so that the function can use an existing log group rather than letting Lambda create one automatically. The module sets `use_existing_cloudwatch_log_group = true` on the Lambda module to prevent a duplicate log group.
+
+- Name: `/aws/lambda/{var.lambda_function_name}`
+- Retention: controlled by `var.cloudwatch_log_group_retention_in_days` (default: indefinite)
+- Encryption: optionally encrypted with `var.cloudwatch_log_group_kms_key_id`
+
+---
+
+## SNS topic
+
+**`aws_sns_topic.this`**
+
+Only created when `create_sns_topic = true` (the default). When you set `create_sns_topic = false`, the module derives the topic ARN from the account ID, region, and `sns_topic_name` instead of creating a new topic.
+
+- Name: `var.sns_topic_name`
+- Server-side encryption: optionally enabled with `var.sns_topic_kms_key_id`
+- Delivery status logging: configured when `var.enable_sns_topic_delivery_status_logs = true`
+
+---
+
+## SNS topic subscription
+
+**`aws_sns_topic_subscription.sns_notify_slack`**
+
+Subscribes the Lambda function to the SNS topic using the `lambda` protocol. The Lambda function ARN comes from `module.lambda.lambda_function_arn`.
+
+- Protocol: `lambda`
+- Filter policy: optionally set via `var.subscription_filter_policy` and `var.subscription_filter_policy_scope`
+
+---
+
+## SNS feedback IAM role
+
+**`aws_iam_role.sns_feedback_role`**
+
+Created only when all of the following are true:
+
+- `var.create = true`
+- `var.create_sns_topic = true`
+- `var.enable_sns_topic_delivery_status_logs = true`
+- `var.sns_topic_lambda_feedback_role_arn = ""` (no existing role provided)
+
+The role's trust policy allows `sns.amazonaws.com` to assume it using `sts:AssumeRole` and `sts:TagSession`.
+
+```hcl
+principals {
+  type        = "Service"
+  identifiers = ["sns.amazonaws.com"]
+}
+```
+
+---
+
+## Lambda module (`module.lambda`)
+
+The module delegates Lambda function creation to the `terraform-aws-modules/lambda/aws` module at version `8.7.0`. The following settings are always applied:
+
+- **`publish = true`** — Lambda versions are always published. This is required because the SNS trigger permission cannot be added to `$LATEST`.
+- **`timeout = 30`** — 30-second function timeout.
+- **`use_existing_cloudwatch_log_group = true`** — Uses the log group created by this module.
+- **`attach_cloudwatch_logs_policy = false`** — CloudWatch permissions are handled by the inline policy described below.
+
+### Lambda trigger permission
+
+The module grants `sns.amazonaws.com` permission to invoke the Lambda function from the SNS topic:
+
+```hcl
+allowed_triggers = {
+  AllowExecutionFromSNS = {
+    principal  = "sns.amazonaws.com"
+    source_arn = local.sns_topic_arn
+  }
+}
+```
+
+---
+
+## IAM policy for the Lambda execution role
+
+The inline policy attached to the Lambda execution role always contains two statements and optionally a third.
+
+### `AllowWriteToCloudwatchLogs` (always present)
+
+```hcl
+actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+resources = ["${aws_cloudwatch_log_group.lambda.arn}:*"]
+```
+
+### `AllowSecurityHub` (always present)
+
+```hcl
+actions   = ["securityhub:BatchUpdateFindings"]
+resources = ["*"]
+```
+
+<Note>
+  `securityhub:BatchUpdateFindings` is always granted so that the Lambda function can update Security Hub finding workflow statuses to `NOTIFIED` when it processes a Security Hub event. If you do not use Security Hub, this permission is harmless.
+</Note>
+
+### `AllowKMSDecrypt` (conditional)
+
+Only added when `var.kms_key_arn` is a non-empty string.
+
+```hcl
+actions   = ["kms:Decrypt"]
+resources = [var.kms_key_arn]
+```
+
+This permission is required when the Slack webhook URL is stored as a KMS-encrypted ciphertext.

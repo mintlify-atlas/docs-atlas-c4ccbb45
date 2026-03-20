@@ -1,80 +1,77 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Deploy AWS-to-Slack notifications in minutes"
 ---
 
-## Get started in three steps
+This guide walks you through deploying the `terraform-aws-modules/notify-slack/aws` module, which creates an SNS topic and a Lambda function that forwards messages to a Slack channel via an incoming webhook.
 
-Get your documentation site running locally and make your first customization.
+## Required variables
 
-### Step 1: Set up your local environment
+| Variable | Type | Description |
+|---|---|---|
+| `sns_topic_name` | `string` | The name of the SNS topic to create |
+| `slack_webhook_url` | `string` | The URL of your Slack incoming webhook |
+| `slack_channel` | `string` | The name of the Slack channel for notifications |
+| `slack_username` | `string` | The username that will appear on Slack messages |
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Warning>
+Treat `slack_webhook_url` as a secret. Anyone with this URL can post messages to your Slack channel. Store it in a secrets manager or encrypt it with KMS rather than committing it to version control. See [Securing the webhook URL](/guides/encryption) for details.
+</Warning>
 
-### Step 2: Deploy your changes
+## Steps
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Steps>
+  <Step title="Set up a Slack incoming webhook">
+    Create an incoming webhook in your Slack workspace:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    1. Go to [https://my.slack.com/services/new/incoming-webhook/](https://my.slack.com/services/new/incoming-webhook/).
+    2. Select the channel where you want notifications to appear.
+    3. Click **Add Incoming WebHooks Integration**.
+    4. Copy the **Webhook URL** — you will use it in the next step.
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Add the module to your Terraform configuration">
+    Add the following block to your Terraform configuration, replacing the placeholder values with your own:
 
-### Step 3: Go live
+    ```hcl
+    module "notify_slack" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+      sns_topic_name = "slack-topic"
 
-## Next steps
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "aws-notification"
+      slack_username    = "reporter"
+    }
+    ```
+  </Step>
 
-Now that you have your docs running, explore these key features:
+  <Step title="Initialize and apply">
+    Run the following commands to provision the resources:
 
-<CardGroup cols={2}>
+    ```bash
+    terraform init
+    terraform plan
+    terraform apply
+    ```
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+    Terraform creates an SNS topic, a Lambda function, and the subscription that connects them.
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+    <Tip>
+      After `terraform apply` completes, run `terraform output slack_topic_arn` to retrieve the ARN of the SNS topic. You will need it to publish test messages and to configure other AWS services to send alerts.
+    </Tip>
+  </Step>
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+  <Step title="Test by publishing a message to the SNS topic">
+    Publish a test message to confirm that notifications reach your Slack channel:
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+    ```bash
+    aws sns publish \
+      --topic-arn $(terraform output -raw slack_topic_arn) \
+      --message "Test notification from terraform-aws-notify-slack"
+    ```
 
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+    Within a few seconds you should see the message appear in the Slack channel you configured.
+  </Step>
+</Steps>

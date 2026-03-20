@@ -1,0 +1,95 @@
+---
+title: "VPC deployment"
+description: "Run the notify-slack Lambda function inside a VPC for private network isolation, and understand the outbound internet access requirement."
+---
+
+By default, the Lambda function runs outside of any VPC and connects directly to the Slack webhook URL over the public internet. If your security requirements mandate that Lambda functions run inside a VPC — for example, to control egress through a firewall or to meet network segmentation policies — you can place the function in private subnets.
+
+## When to use VPC deployment
+
+Consider deploying into a VPC when:
+
+- Your organization requires all compute workloads to run within a private network.
+- You need to route outbound traffic through a centralized NAT gateway for inspection or auditing.
+- Compliance controls prohibit functions from having direct internet access.
+
+## Configure VPC settings
+
+Pass subnet IDs and security group IDs to the module. Use private or intra subnets — subnets that do not have a direct route to the internet gateway.
+
+```hcl
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = "my-vpc"
+  cidr = "10.10.0.0/16"
+
+  azs           = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+  intra_subnets = ["10.10.101.0/24", "10.10.102.0/24", "10.10.103.0/24"]
+  private_subnets = ["10.10.1.0/24", "10.10.2.0/24", "10.10.3.0/24"]
+
+  enable_nat_gateway = true
+}
+
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  lambda_function_vpc_subnet_ids         = module.vpc.private_subnets
+  lambda_function_vpc_security_group_ids = [module.vpc.default_security_group_id]
+}
+```
+
+<Note>
+  When `lambda_function_vpc_subnet_ids` is set to a non-null value, the module automatically sets `attach_network_policy = true` on the underlying Lambda module. This attaches the `AWSLambdaVPCAccessExecutionRole` managed policy to the Lambda IAM role, which is required for the function to create and manage VPC network interfaces.
+</Note>
+
+## Outbound internet access requirement
+
+<Warning>
+  The Lambda function must be able to reach `https://hooks.slack.com` to deliver notifications. Subnets without a route to the internet will cause all Slack notifications to fail silently at the network level. You must provide one of the following:
+
+  - **NAT gateway**: Place the Lambda in private subnets that route `0.0.0.0/0` through a NAT gateway in a public subnet.
+  - **NAT instance**: An EC2 NAT instance can serve the same purpose for cost-sensitive environments.
+
+  Intra subnets (no internet route at all) are only appropriate if you have a VPC endpoint for Slack, which is not a standard AWS-managed endpoint. Do not use intra subnets unless you have confirmed an alternative outbound path to `hooks.slack.com`.
+</Warning>
+
+## Security group configuration
+
+The security group attached to the Lambda function must allow outbound HTTPS (TCP 443) to `0.0.0.0/0` (or to the specific IP ranges used by `hooks.slack.com`). There is no need for any inbound rules, since Lambda is invoked by SNS through the Lambda API rather than through a network connection.
+
+```hcl
+resource "aws_security_group" "lambda_notify_slack" {
+  name        = "lambda-notify-slack"
+  description = "Security group for notify-slack Lambda function"
+  vpc_id      = module.vpc.vpc_id
+
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  lambda_function_vpc_subnet_ids         = module.vpc.private_subnets
+  lambda_function_vpc_security_group_ids = [aws_security_group.lambda_notify_slack.id]
+}
+```

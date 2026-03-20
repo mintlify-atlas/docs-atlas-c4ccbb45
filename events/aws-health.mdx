@@ -1,0 +1,110 @@
+---
+title: "AWS Health events"
+description: "How the module detects and formats AWS Health events into Slack notifications."
+---
+
+The Lambda function detects AWS Health events when `detail-type == "AWS Health Event"`. These events notify you of issues, scheduled maintenance, and account notifications that affect your AWS infrastructure.
+
+<Note>AWS Health events are global. You must create your EventBridge rule in the **us-east-1** region to receive them. Health events do not appear in regional event buses.</Note>
+
+## Event categories and colors
+
+The `eventTypeCategory` field in the event maps to a Slack attachment color via the `AwsHealthCategory` enum:
+
+| Category              | Slack color  | Appearance | Description                              |
+|-----------------------|-------------|------------|------------------------------------------|
+| `issue`               | `danger`    | Red        | Active issues affecting your resources  |
+| `scheduledChange`     | `warning`   | Yellow     | Upcoming maintenance or changes          |
+| `accountNotification` | `#777777`   | Gray       | Informational account-level notices      |
+
+## Fields in the Slack message
+
+| Field               | Source in event                                     |
+|---------------------|-----------------------------------------------------|
+| Affected Service    | `detail.service`                                    |
+| Affected Region     | `message.region`                                    |
+| Code                | `detail.eventTypeCode`                              |
+| Event Description   | `detail.eventDescription[0].latestDescription`      |
+| Affected Resources  | `resources` (comma-separated list)                  |
+| Start Time          | `detail.startTime`                                  |
+| End Time            | `detail.endTime`                                    |
+| Link to Event       | `https://phd.aws.amazon.com/phd/home?region={region}#/dashboard/open-issues` |
+
+## Example event payload
+
+```json
+{
+  "version": "0",
+  "id": "121345678-1234-1234-1234-123456789012",
+  "detail-type": "AWS Health Event",
+  "source": "aws.health",
+  "account": "123456789012",
+  "time": "2016-06-05T06:27:57Z",
+  "region": "us-west-2",
+  "resources": [
+    "i-abcd1111"
+  ],
+  "detail": {
+    "eventArn": "arn:aws:health:us-west-2::event/AWS_EC2_INSTANCE_STORE_DRIVE_PERFORMANCE_DEGRADED_90353408594353980",
+    "service": "EC2",
+    "eventTypeCode": "AWS_EC2_INSTANCE_STORE_DRIVE_PERFORMANCE_DEGRADED",
+    "eventTypeCategory": "issue",
+    "startTime": "Sat, 05 Jun 2016 15:10:09 GMT",
+    "eventDescription": [
+      {
+        "language": "en_US",
+        "latestDescription": "A description of the event will be provided here"
+      }
+    ],
+    "affectedEntities": [
+      {
+        "entityValue": "i-abcd1111",
+        "tags": {
+          "stage": "prod",
+          "app": "my-app"
+        }
+      }
+    ]
+  }
+}
+```
+
+## Setting up EventBridge to forward Health events
+
+<Warning>Create this rule in `us-east-1`. Health events are only published to the event bus in us-east-1, regardless of which region your resources are in.</Warning>
+
+```hcl
+resource "aws_cloudwatch_event_rule" "aws_health" {
+  provider = aws.us_east_1   # Health events require us-east-1
+  name        = "forward-aws-health-events"
+  description = "Forward AWS Health events to Slack"
+
+  event_pattern = jsonencode({
+    source      = ["aws.health"]
+    detail-type = ["AWS Health Event"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "aws_health_sns" {
+  provider  = aws.us_east_1
+  rule      = aws_cloudwatch_event_rule.aws_health.name
+  target_id = "SendToSNS"
+  arn       = module.notify_slack.slack_topic_arn
+}
+
+resource "aws_sns_topic_policy" "allow_eventbridge_health" {
+  arn = module.notify_slack.slack_topic_arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "SNS:Publish"
+      Resource  = module.notify_slack.slack_topic_arn
+    }]
+  })
+}
+```
+
+<Tip>You can filter the rule to specific services or event type codes. For example, add `"detail.service": ["EC2", "RDS"]` to the event pattern to receive only EC2 and RDS health events.</Tip>

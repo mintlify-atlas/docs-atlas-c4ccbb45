@@ -1,0 +1,103 @@
+---
+title: "CloudWatch alarms"
+description: "How the module detects and formats CloudWatch alarm state changes into Slack notifications."
+---
+
+The Lambda function detects CloudWatch alarm events by checking for the presence of an `AlarmName` key in the SNS message body. When found, it routes the message to the CloudWatch alarm formatter.
+
+## Alarm states and colors
+
+Each alarm state maps to a Slack attachment color via the `CloudWatchAlarmState` enum:
+
+| State               | Slack color  | Appearance     |
+|---------------------|-------------|----------------|
+| `OK`                | `good`      | Green          |
+| `INSUFFICIENT_DATA` | `warning`   | Yellow         |
+| `ALARM`             | `danger`    | Red            |
+
+## Fields in the Slack message
+
+The formatted Slack attachment includes the following fields:
+
+| Field             | Description                                                     |
+|-------------------|-----------------------------------------------------------------|
+| Alarm Name        | The name of the CloudWatch alarm                                |
+| Alarm Description | The description set on the alarm                                |
+| Alarm reason      | The `NewStateReason` — why the state changed                    |
+| Old State         | The previous alarm state (`OldStateValue`)                      |
+| Current State     | The new alarm state (`NewStateValue`)                           |
+| Link to Alarm     | Direct link to the alarm in the CloudWatch console              |
+
+## Example SNS message payload
+
+This is the structure of the CloudWatch alarm notification that arrives in the SNS message body:
+
+```json
+{
+  "AlarmName": "Example",
+  "AlarmDescription": "Example alarm description.",
+  "AWSAccountId": "000000000000",
+  "NewStateValue": "ALARM",
+  "NewStateReason": "Threshold Crossed",
+  "StateChangeTime": "2017-01-12T16:30:42.236+0000",
+  "Region": "EU - Ireland",
+  "OldStateValue": "OK"
+}
+```
+
+## Connecting CloudWatch alarms to the SNS topic
+
+You can send alarm state changes to the SNS topic in two ways.
+
+<Tabs>
+  <Tab title="Alarm action (recommended)">
+    Set the SNS topic ARN as an alarm action on the CloudWatch alarm. CloudWatch publishes directly to SNS on every state transition.
+
+    ```hcl
+    resource "aws_cloudwatch_metric_alarm" "example" {
+      alarm_name          = "high-cpu-utilization"
+      comparison_operator = "GreaterThanThreshold"
+      evaluation_periods  = 2
+      metric_name         = "CPUUtilization"
+      namespace           = "AWS/EC2"
+      period              = 120
+      statistic           = "Average"
+      threshold           = 80
+      alarm_description   = "CPU utilization exceeded 80% for 4 minutes."
+
+      dimensions = {
+        InstanceId = "i-1234567890abcdef0"
+      }
+
+      alarm_actions             = [module.notify_slack.slack_topic_arn]
+      ok_actions                = [module.notify_slack.slack_topic_arn]
+      insufficient_data_actions = [module.notify_slack.slack_topic_arn]
+    }
+    ```
+
+    <Tip>Adding the SNS topic to `ok_actions` and `insufficient_data_actions` ensures you receive a Slack notification for every state change, not just when an alarm fires.</Tip>
+  </Tab>
+  <Tab title="EventBridge rule">
+    Use an EventBridge rule to forward CloudWatch alarm state change events to the SNS topic.
+
+    ```hcl
+    resource "aws_cloudwatch_event_rule" "cloudwatch_alarms" {
+      name        = "forward-cloudwatch-alarms"
+      description = "Forward CloudWatch alarm state changes to Slack"
+
+      event_pattern = jsonencode({
+        source      = ["aws.cloudwatch"]
+        detail-type = ["CloudWatch Alarm State Change"]
+      })
+    }
+
+    resource "aws_cloudwatch_event_target" "cloudwatch_alarms_sns" {
+      rule      = aws_cloudwatch_event_rule.cloudwatch_alarms.name
+      target_id = "SendToSNS"
+      arn       = module.notify_slack.slack_topic_arn
+    }
+    ```
+
+    <Note>EventBridge delivers a different event structure than the native CloudWatch alarm action. The native alarm action payload shown in the example above is what the formatter expects, so the alarm action approach is generally simpler.</Note>
+  </Tab>
+</Tabs>

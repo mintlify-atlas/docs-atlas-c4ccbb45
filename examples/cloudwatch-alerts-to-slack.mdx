@@ -1,0 +1,319 @@
+---
+title: "CloudWatch alerts to Slack"
+description: "End-to-end example showing how to route CloudWatch metric alarms through SNS to Slack, with the webhook URL encrypted using AWS KMS."
+---
+
+This example deploys the full pipeline: a KMS key encrypts your Slack webhook URL, the `notify_slack` module creates Lambda functions subscribed to an SNS topic, and a CloudWatch metric alarm sends its notifications to that SNS topic. The example deploys three instances of the module (for `develop`, `release`, and `test` environments) using `for_each`.
+
+<Warning>
+In this example, `aws_kms_ciphertext` is used inline in Terraform. The plaintext webhook URL will appear in your Terraform state file and logs. In production, encrypt the webhook URL outside of Terraform and supply only the ciphertext.
+</Warning>
+
+## How to use this example
+
+<Steps>
+  <Step title="Clone or copy the example">
+    Clone the repository and navigate to the example directory:
+
+    ```bash
+    git clone https://github.com/terraform-aws-modules/terraform-aws-notify-slack.git
+    cd terraform-aws-notify-slack/examples/cloudwatch-alerts-to-slack
+    ```
+  </Step>
+
+  <Step title="Set your Slack webhook URL">
+    Open `main.tf` and replace the placeholder webhook URL in `aws_kms_ciphertext.slack_url` with your real Slack incoming webhook URL:
+
+    ```hcl
+    resource "aws_kms_ciphertext" "slack_url" {
+      plaintext = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+      key_id    = aws_kms_key.this.arn
+    }
+    ```
+  </Step>
+
+  <Step title="Initialize Terraform">
+    ```bash
+    terraform init
+    ```
+  </Step>
+
+  <Step title="Preview the changes">
+    ```bash
+    terraform plan
+    ```
+  </Step>
+
+  <Step title="Apply the configuration">
+    ```bash
+    terraform apply
+    ```
+  </Step>
+</Steps>
+
+## main.tf
+
+```hcl
+provider "aws" {
+  region = "eu-west-1"
+}
+
+resource "aws_kms_key" "this" {
+  description = "KMS key for notify-slack test"
+}
+
+# Encrypt the URL, storing encryption here will show it in logs and in tfstate
+# https://www.terraform.io/docs/state/sensitive-data.html
+resource "aws_kms_ciphertext" "slack_url" {
+  plaintext = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  key_id    = aws_kms_key.this.arn
+}
+
+module "notify_slack" {
+  source = "../../"
+
+  for_each = toset([
+    "develop",
+    "release",
+    "test",
+  ])
+
+  sns_topic_name                        = "slack-topic"
+  enable_sns_topic_delivery_status_logs = true
+
+  # Specify the ARN of the pre-defined feedback role or leave blank to have the module create it
+  #sns_topic_lambda_feedback_role_arn = "arn:aws:iam::111122223333:role/sns-delivery-status"
+
+  lambda_function_name = "notify_slack_${each.value}"
+
+  slack_webhook_url = aws_kms_ciphertext.slack_url.ciphertext_blob
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  kms_key_arn = aws_kms_key.this.arn
+
+  lambda_description = "Lambda function which sends notifications to Slack"
+  log_events         = true
+
+  # VPC
+  #  lambda_function_vpc_subnet_ids = module.vpc.intra_subnets
+  #  lambda_function_vpc_security_group_ids = [module.vpc.default_security_group_id]
+
+  tags = {
+    Name = "cloudwatch-alerts-to-slack"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "lambda_duration" {
+  alarm_name          = "NotifySlackDuration"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "5000"
+  alarm_description   = "Duration of notifying slack exceeds threshold"
+
+  alarm_actions = [module.notify_slack["develop"].slack_topic_arn]
+
+  dimensions = {
+    FunctionName = module.notify_slack["develop"].notify_slack_lambda_function_name
+  }
+}
+
+######
+# VPC
+######
+resource "random_pet" "this" {
+  length = 2
+}
+
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = random_pet.this.id
+  cidr = "10.10.0.0/16"
+
+  azs           = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+  intra_subnets = ["10.10.101.0/24", "10.10.102.0/24", "10.10.103.0/24"]
+}
+```
+
+## Key parts explained
+
+### 1. KMS key creation
+
+```hcl
+resource "aws_kms_key" "this" {
+  description = "KMS key for notify-slack test"
+}
+
+resource "aws_kms_ciphertext" "slack_url" {
+  plaintext = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  key_id    = aws_kms_key.this.arn
+}
+```
+
+The `aws_kms_key` resource creates a new customer-managed key. `aws_kms_ciphertext` uses that key to encrypt the plaintext webhook URL and produces a `ciphertext_blob` that you can safely pass to the module.
+
+<Note>
+There are three ways to supply the KMS key ARN to the module:
+
+**Option 1** — Create a new key and optional alias:
+```hcl
+resource "aws_kms_key" "this" {
+  description = "KMS key for notify-slack test"
+}
+
+resource "aws_kms_alias" "this" {
+  name          = "alias/kms-test-key"
+  target_key_id = aws_kms_key.this.id
+}
+
+// kms_key_arn = aws_kms_key.this.arn
+```
+
+**Option 2** — Look up an existing key by alias:
+```hcl
+data "aws_kms_alias" "this" {
+  name = "alias/kms-test-key"
+}
+
+// kms_key_arn = data.aws_kms_alias.this.target_key_arn
+```
+
+**Option 3** — Hard-code the ARN:
+```hcl
+// kms_key_arn = "arn:aws:kms:eu-west-1:835367859851:key/054b4846-95fe-4537-94f2-1dfd255238cf"
+```
+</Note>
+
+### 2. SNS topic and notify-slack module
+
+```hcl
+module "notify_slack" {
+  source = "../../"
+
+  for_each = toset(["develop", "release", "test"])
+
+  sns_topic_name                        = "slack-topic"
+  enable_sns_topic_delivery_status_logs = true
+
+  lambda_function_name = "notify_slack_${each.value}"
+
+  slack_webhook_url = aws_kms_ciphertext.slack_url.ciphertext_blob
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  kms_key_arn = aws_kms_key.this.arn
+
+  lambda_description = "Lambda function which sends notifications to Slack"
+  log_events         = true
+  ...
+}
+```
+
+`for_each` deploys one independent module instance per environment key. Each instance gets its own Lambda function (`notify_slack_develop`, `notify_slack_release`, `notify_slack_test`). Passing `kms_key_arn` tells the Lambda function which key to use when decrypting the encrypted `slack_webhook_url` at runtime.
+
+### 3. CloudWatch metric alarm
+
+```hcl
+resource "aws_cloudwatch_metric_alarm" "lambda_duration" {
+  alarm_name          = "NotifySlackDuration"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "1"
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "5000"
+  alarm_description   = "Duration of notifying slack exceeds threshold"
+
+  alarm_actions = [module.notify_slack["develop"].slack_topic_arn]
+
+  dimensions = {
+    FunctionName = module.notify_slack["develop"].notify_slack_lambda_function_name
+  }
+}
+```
+
+The alarm watches the average `Duration` metric of the Lambda function in the `develop` instance. When the average execution duration exceeds 5,000 ms over a 60-second period, the alarm fires and publishes a message to the SNS topic. The module's Lambda picks up that message and posts it to Slack.
+
+### 4. VPC (optional)
+
+```hcl
+module "vpc" {
+  source = "terraform-aws-modules/vpc/aws"
+
+  name = random_pet.this.id
+  cidr = "10.10.0.0/16"
+
+  azs           = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+  intra_subnets = ["10.10.101.0/24", "10.10.102.0/24", "10.10.103.0/24"]
+}
+```
+
+The VPC is included as a reference for deploying the Lambda function inside a private network. Uncomment the `lambda_function_vpc_subnet_ids` and `lambda_function_vpc_security_group_ids` arguments in the module block to enable it.
+
+## Variables
+
+This example defines no input variables. All values are hard-coded directly in `main.tf`.
+
+## Outputs
+
+All outputs reference the `develop` module instance:
+
+```hcl
+output "sns_topic_arn" {
+  description = "The ARN of the SNS topic from which messages will be sent to Slack"
+  value       = module.notify_slack["develop"].slack_topic_arn
+}
+
+output "lambda_iam_role_arn" {
+  description = "The ARN of the IAM role used by Lambda function"
+  value       = module.notify_slack["develop"].lambda_iam_role_arn
+}
+
+output "lambda_iam_role_name" {
+  description = "The name of the IAM role used by Lambda function"
+  value       = module.notify_slack["develop"].lambda_iam_role_name
+}
+
+output "notify_slack_lambda_function_arn" {
+  description = "The ARN of the Lambda function"
+  value       = module.notify_slack["develop"].notify_slack_lambda_function_arn
+}
+
+output "notify_slack_lambda_function_name" {
+  description = "The name of the Lambda function"
+  value       = module.notify_slack["develop"].notify_slack_lambda_function_name
+}
+
+output "notify_slack_lambda_function_invoke_arn" {
+  description = "The ARN to be used for invoking Lambda function from API Gateway"
+  value       = module.notify_slack["develop"].notify_slack_lambda_function_invoke_arn
+}
+
+output "notify_slack_lambda_function_last_modified" {
+  description = "The date Lambda function was last modified"
+  value       = module.notify_slack["develop"].notify_slack_lambda_function_last_modified
+}
+
+output "notify_slack_lambda_function_version" {
+  description = "Latest published version of your Lambda function"
+  value       = module.notify_slack["develop"].notify_slack_lambda_function_version
+}
+```
+
+## Requirements
+
+| Provider | Version |
+|----------|---------|
+| Terraform | `>= 1.5.7` |
+| `hashicorp/aws` | `>= 6.28` |
+| `hashicorp/random` | `>= 2.0` |
+
+## Source
+
+View the full example on GitHub: [examples/cloudwatch-alerts-to-slack](https://github.com/terraform-aws-modules/terraform-aws-notify-slack/tree/master/examples/cloudwatch-alerts-to-slack)

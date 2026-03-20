@@ -1,97 +1,103 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "AWS Notify Slack"
+description: "A Terraform module that sends AWS notifications to Slack — CloudWatch alarms, GuardDuty findings, Security Hub alerts, and more."
 ---
 
-## Setting up
-
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Deploy your first Slack notification in under 5 minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Event Types" icon="bell" href="/events/cloudwatch-alarms">
+    See all supported AWS event types and their Slack message formats.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Module Reference" icon="code" href="/reference/inputs">
+    Browse every input variable and output value.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Examples" icon="book-open" href="/examples/notify-slack-simple">
+    Complete, copy-paste ready Terraform examples.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is AWS Notify Slack?
 
-Everything you need to create world-class documentation.
+`terraform-aws-notify-slack` is a Terraform module that wires up AWS infrastructure to forward notifications to a Slack channel. It creates an **SNS topic** and an **AWS Lambda function** (Python 3.13) that parses incoming events and formats them as rich Slack messages.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
 
-## Need inspiration?
+  sns_topic_name    = "slack-topic"
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+}
+```
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+## Supported event types
+
+The Lambda function automatically detects and formats these AWS event types:
+
+<CardGroup cols={3}>
+  <Card title="CloudWatch Alarms" icon="chart-line" href="/events/cloudwatch-alarms">
+    Color-coded OK / ALARM / INSUFFICIENT_DATA states
+  </Card>
+  <Card title="GuardDuty Findings" icon="shield-halved" href="/events/guardduty-findings">
+    Threat severity with links to the GuardDuty console
+  </Card>
+  <Card title="Security Hub" icon="lock" href="/events/security-hub">
+    Inspector and Security Hub findings with compliance status
+  </Card>
+  <Card title="AWS Health Events" icon="heart-pulse" href="/events/aws-health">
+    Service disruptions, scheduled changes, account notifications
+  </Card>
+  <Card title="AWS Backup" icon="database" href="/events/aws-backup">
+    Backup job completion and failure notifications
+  </Card>
+  <Card title="Generic Messages" icon="message" href="/events/generic-messages">
+    Any SNS message — plain text or structured JSON
+  </Card>
+</CardGroup>
+
+## Key features
+
+- **Zero boilerplate** — one module call creates the full SNS → Lambda → Slack pipeline
+- **KMS encryption** — store your webhook URL encrypted at rest with AWS KMS
+- **VPC support** — run the Lambda function inside your private VPC
+- **Custom Lambda** — bring your own Python function to override message formatting
+- **SNS delivery logs** — optional CloudWatch logging for SNS delivery status
+- **Existing SNS topics** — subscribe the Lambda to an SNS topic you already own
+- **S3 artifact storage** — optionally store Lambda packages in S3 instead of locally
+
+## Architecture
+
+```
+AWS Services (CloudWatch, GuardDuty, etc.)
+        │
+        ▼
+   SNS Topic  ──────────────────────────────────┐
+        │                                        │
+        ▼                                        │
+  Lambda Function                         (filter policy
+  notify_slack.py                          optional)
+        │
+        ▼
+  Slack Webhook URL
+  (plaintext or KMS-encrypted)
+        │
+        ▼
+  Slack Channel
+```
+
+The module uses [`terraform-aws-modules/lambda/aws`](https://github.com/terraform-aws-modules/terraform-aws-lambda) under the hood to package and deploy the Lambda function.
+
+## Requirements
+
+| Dependency | Minimum version |
+|---|---|
+| Terraform | `>= 1.5.7` |
+| AWS provider | `>= 6.28` |
+
+<Note>
+  Before deploying, set up an [incoming webhook integration](https://my.slack.com/services/new/incoming-webhook/) in your Slack workspace to obtain a webhook URL.
+</Note>

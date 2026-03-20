@@ -1,0 +1,86 @@
+---
+title: "Security Hub findings"
+description: "How the module detects and formats Security Hub findings from AWS Inspector and Security Hub into Slack notifications."
+---
+
+The Lambda function detects Security Hub events when `detail-type == "Security Hub Findings - Imported"`. It handles findings from two product sources: **AWS Inspector** and **Security Hub** itself.
+
+## Severity and colors
+
+Finding severity maps to a Slack attachment color via the `SecurityHubSeverity` enum:
+
+| Severity label  | Slack color  | Appearance |
+|-----------------|-------------|------------|
+| `CRITICAL`      | `danger`    | Red        |
+| `HIGH`          | `danger`    | Red        |
+| `MEDIUM`        | `warning`   | Yellow     |
+| `LOW`           | `#777777`   | Gray       |
+| `INFORMATIONAL` | `#439FE0`   | Blue       |
+
+<Note>If `compliance_status` is `PASSED`, the color is overridden to `#4BB543` (green) regardless of severity label.</Note>
+
+## Fields in the Slack message
+
+Both Inspector and Security Hub findings include the same set of fields:
+
+| Field             | Source in finding                                      |
+|-------------------|--------------------------------------------------------|
+| Title             | `finding.Title`                                        |
+| Description       | `finding.Description`                                  |
+| Compliance Status | `finding.Compliance.Status`                            |
+| Severity          | `finding.Severity.Label`                               |
+| Control ID        | `finding.ProductFields.ControlId`                      |
+| Account ID        | `finding.AwsAccountId`                                 |
+| First Observed    | `finding.FirstObservedAt`                              |
+| Last Updated      | `finding.UpdatedAt`                                    |
+| Affected Resource | `finding.Resources[0].Id`                              |
+| Generator         | `finding.GeneratorId`                                  |
+| Control URL       | Link to the control in the Security Hub console        |
+| Finding URL       | Direct link to the finding in the Security Hub console |
+| Remediation       | `finding.Remediation.Recommendation.Url`               |
+
+## Auto-status update to prevent repeated notifications
+
+When a finding has `compliance_status == FAILED` and `workflow_status == NEW`, the Lambda automatically calls `securityhub:BatchUpdateFindings` to set the workflow status to `NOTIFIED`.
+
+This prevents the same finding from triggering repeated Slack messages on subsequent imports.
+
+The required `securityhub:BatchUpdateFindings` permission is automatically included in the IAM role that the module creates for the Lambda function (`AllowSecurityHub` policy statement). You do not need to add this permission manually.
+
+<Warning>If the `BatchUpdateFindings` call fails (for example, due to a permissions issue), the Lambda logs the error and continues — it does not fail the invocation. Check CloudWatch Logs if you suspect findings are not being marked as NOTIFIED.</Warning>
+
+## Setting up EventBridge to forward findings
+
+```hcl
+resource "aws_cloudwatch_event_rule" "security_hub_findings" {
+  name        = "forward-security-hub-findings"
+  description = "Forward Security Hub findings to Slack"
+
+  event_pattern = jsonencode({
+    source      = ["aws.securityhub"]
+    detail-type = ["Security Hub Findings - Imported"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "security_hub_findings_sns" {
+  rule      = aws_cloudwatch_event_rule.security_hub_findings.name
+  target_id = "SendToSNS"
+  arn       = module.notify_slack.slack_topic_arn
+}
+
+resource "aws_sns_topic_policy" "allow_eventbridge" {
+  arn = module.notify_slack.slack_topic_arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "SNS:Publish"
+      Resource  = module.notify_slack.slack_topic_arn
+    }]
+  })
+}
+```
+
+<Tip>You can narrow the EventBridge rule using `detail.findings.ProductName` to forward only Inspector findings, only Security Hub findings, or both.</Tip>

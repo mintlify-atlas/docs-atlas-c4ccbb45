@@ -1,0 +1,120 @@
+---
+title: "SNS topic configuration"
+description: "Configure SNS topics for the notify-slack module — create a new topic or subscribe to an existing one, with encryption, delivery status logs, and filter policies."
+---
+
+The module can either create a new SNS topic for you or subscribe the Lambda function to an existing topic you already manage. Both modes are controlled by the `create_sns_topic` variable.
+
+## Create new topic vs use existing
+
+<Tabs>
+  <Tab title="Create new topic">
+    By default, `create_sns_topic = true` and the module creates an SNS topic named after `sns_topic_name`. This is the simplest setup.
+
+    ```hcl
+    module "notify_slack" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      sns_topic_name = "slack-topic"
+
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "aws-notification"
+      slack_username    = "reporter"
+    }
+    ```
+  </Tab>
+  <Tab title="Use existing topic">
+    Set `create_sns_topic = false` and pass the name of your existing SNS topic. The module constructs the topic ARN from the current account, region, and `sns_topic_name`, then subscribes the Lambda to it.
+
+    ```hcl
+    resource "aws_sns_topic" "existing" {
+      name = "my-existing-topic"
+    }
+
+    module "notify_slack" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      sns_topic_name   = aws_sns_topic.existing.name
+      create_sns_topic = false
+
+      slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      slack_channel     = "aws-notification"
+      slack_username    = "reporter"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## KMS encryption for the SNS topic
+
+To enable server-side encryption (SSE) on the SNS topic, pass the ARN of your KMS key to `sns_topic_kms_key_id`. This only applies when `create_sns_topic = true`.
+
+```hcl
+resource "aws_kms_key" "sns" {
+  description = "KMS key for SNS topic encryption"
+}
+
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name       = "slack-topic"
+  sns_topic_kms_key_id = aws_kms_key.sns.arn
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+}
+```
+
+<Note>
+  `sns_topic_kms_key_id` is the ARN (or alias ARN) of the KMS key used to encrypt messages at rest in the SNS topic. This is separate from the `kms_key_arn` used to decrypt the Slack webhook URL inside the Lambda function.
+</Note>
+
+## SNS delivery status logs
+
+You can enable delivery status logging to track whether SNS successfully delivered messages to the Lambda subscriber. Set `enable_sns_topic_delivery_status_logs = true`.
+
+When enabled, the module creates an IAM role that SNS assumes to write delivery logs to CloudWatch. You can override the sample rate for successful deliveries using `sns_topic_lambda_feedback_sample_rate` (defaults to `100`, meaning all successful deliveries are logged).
+
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  enable_sns_topic_delivery_status_logs    = true
+  sns_topic_lambda_feedback_sample_rate    = 50  # log 50% of successful deliveries
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+}
+```
+
+If you want to supply a pre-existing IAM role instead of letting the module create one, set `sns_topic_lambda_feedback_role_arn` to its ARN. When that variable is set, no new role is created.
+
+## Subscription filter policy
+
+You can restrict which SNS messages the Lambda subscriber processes by attaching a filter policy to the subscription. Use `subscription_filter_policy` to pass a JSON-encoded filter policy string, and `subscription_filter_policy_scope` to set the scope to either `MessageAttributes` or `MessageBody`.
+
+```hcl
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  subscription_filter_policy       = jsonencode({ environment = ["production"] })
+  subscription_filter_policy_scope = "MessageAttributes"
+
+  slack_webhook_url = "https://hooks.slack.com/services/AAA/BBB/CCC"
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+}
+```
+
+With the example above, only messages where the `environment` message attribute equals `production` are delivered to the Lambda function.

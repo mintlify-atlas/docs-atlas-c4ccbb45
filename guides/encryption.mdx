@@ -1,0 +1,110 @@
+---
+title: "Encrypting the webhook URL"
+description: "Use AWS KMS to encrypt the Slack webhook URL so it is never stored in plaintext in Terraform state or environment variables."
+---
+
+By default, the `slack_webhook_url` variable is passed to the Lambda function as a plaintext environment variable. Anyone with access to the Lambda configuration, the Terraform state file, or CloudTrail logs can read the raw webhook URL.
+
+Encrypting the URL with AWS KMS means the ciphertext is what gets stored — in state, in the environment variable, and in version control — while the plaintext URL only exists in memory inside the Lambda execution environment.
+
+<Warning>
+  Terraform state files contain all resource attributes, including environment variable values. If you pass the webhook URL in plaintext, it will be stored unencrypted in your state backend. Use remote state with encryption at rest (e.g., S3 with SSE) and restrict access accordingly.
+</Warning>
+
+## Set up KMS encryption
+
+<Steps>
+  <Step title="Create a KMS key">
+    Create a KMS key to use for encrypting the webhook URL. You can do this through the AWS Console, CLI, or Terraform.
+
+    ```hcl
+    resource "aws_kms_key" "slack" {
+      description = "KMS key for Slack webhook URL encryption"
+    }
+    ```
+  </Step>
+
+  <Step title="Encrypt the webhook URL">
+    Use the AWS CLI to encrypt the webhook URL with your KMS key. The output is a base64-encoded ciphertext blob.
+
+    ```bash
+    aws kms encrypt \
+      --key-id <key-arn> \
+      --plaintext fileb://<(echo -n 'https://hooks.slack.com/services/AAA/BBB/CCC') \
+      --query CiphertextBlob \
+      --output text
+    ```
+
+    Alternatively, you can use Terraform's `aws_kms_ciphertext` resource to perform the encryption as part of your plan:
+
+    ```hcl
+    resource "aws_kms_ciphertext" "slack_url" {
+      plaintext = "https://hooks.slack.com/services/AAA/BBB/CCC"
+      key_id    = aws_kms_key.slack.arn
+    }
+    ```
+
+    <Warning>
+      Using `aws_kms_ciphertext` in Terraform still stores the plaintext value in your state file. For stricter compliance requirements, encrypt the URL outside of Terraform using the AWS CLI and pass only the resulting ciphertext blob.
+    </Warning>
+  </Step>
+
+  <Step title="Pass the ciphertext and key ARN to the module">
+    Pass the encrypted ciphertext blob as `slack_webhook_url` and provide the KMS key ARN via `kms_key_arn`. The module attaches a `kms:Decrypt` permission to the Lambda IAM role automatically when `kms_key_arn` is non-empty.
+
+    ```hcl
+    module "notify_slack" {
+      source  = "terraform-aws-modules/notify-slack/aws"
+      version = "~> 7.0"
+
+      sns_topic_name = "slack-topic"
+
+      slack_webhook_url = aws_kms_ciphertext.slack_url.ciphertext_blob
+      slack_channel     = "aws-notification"
+      slack_username    = "reporter"
+
+      kms_key_arn = aws_kms_key.slack.arn
+    }
+    ```
+  </Step>
+</Steps>
+
+## How the Lambda detects an encrypted URL
+
+The Lambda function checks whether `SLACK_WEBHOOK_URL` starts with `"http"`. If it does not, the function treats the value as a KMS-encrypted ciphertext blob and decrypts it using the KMS client before making the webhook request:
+
+```python
+slack_url = os.environ["SLACK_WEBHOOK_URL"]
+if not slack_url.startswith("http"):
+    slack_url = decrypt_url(slack_url)
+```
+
+Base64-encoded KMS ciphertext never starts with `"http"`, so this check reliably distinguishes encrypted from plaintext URLs without requiring a separate configuration flag.
+
+## Encrypting CloudWatch logs
+
+You can also encrypt the Lambda's CloudWatch log group using a KMS key. Pass the key ARN to `cloudwatch_log_group_kms_key_id`:
+
+```hcl
+resource "aws_kms_key" "logs" {
+  description = "KMS key for Lambda CloudWatch log group encryption"
+}
+
+module "notify_slack" {
+  source  = "terraform-aws-modules/notify-slack/aws"
+  version = "~> 7.0"
+
+  sns_topic_name = "slack-topic"
+
+  slack_webhook_url = aws_kms_ciphertext.slack_url.ciphertext_blob
+  slack_channel     = "aws-notification"
+  slack_username    = "reporter"
+
+  kms_key_arn                    = aws_kms_key.slack.arn
+  cloudwatch_log_group_kms_key_id = aws_kms_key.logs.arn
+}
+```
+
+<Note>
+  The KMS key used for CloudWatch Logs must have a key policy that grants the CloudWatch Logs service principal (`logs.<region>.amazonaws.com`) permission to use the key. See the [AWS documentation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html) for the required key policy statements.
+</Note>
