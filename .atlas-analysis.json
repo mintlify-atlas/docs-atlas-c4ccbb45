@@ -1,0 +1,107 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "AWS Notify Slack",
+  "projectDescription": "A Terraform module that creates AWS SNS and Lambda resources to send CloudWatch alarms, GuardDuty findings, and other AWS notifications to Slack channels.",
+  "theme": "aspen",
+  "primaryColor": "#594ed8",
+  "lightColor": "#acacf4",
+  "darkColor": "#040404",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/sns-topic",
+              "guides/encryption",
+              "guides/vpc-deployment",
+              "guides/custom-lambda",
+              "guides/terraform-cloud"
+            ]
+          },
+          {
+            "group": "Event Types",
+            "pages": [
+              "events/cloudwatch-alarms",
+              "events/guardduty-findings",
+              "events/security-hub",
+              "events/aws-health",
+              "events/aws-backup",
+              "events/generic-messages"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/notify-slack-simple",
+              "examples/cloudwatch-alerts-to-slack"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Module Reference",
+            "pages": [
+              "reference/inputs",
+              "reference/outputs",
+              "reference/resources"
+            ]
+          },
+          {
+            "group": "Lambda Function",
+            "pages": [
+              "reference/lambda-function",
+              "reference/local-development"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Creates SNS topic and Lambda function for Slack notifications",
+    "Supports AWS CloudWatch Alarms with color-coded severity",
+    "Handles GuardDuty findings and malware scan results",
+    "Integrates with AWS Security Hub findings",
+    "Supports AWS Health Events and AWS Backup notifications",
+    "KMS encryption support for Slack webhook URL",
+    "VPC deployment support for Lambda function",
+    "Custom Lambda function override capability",
+    "SNS topic delivery status logging",
+    "Python 3.13 Lambda runtime"
+  ],
+  "publicApiSurface": [
+    "var.sns_topic_name",
+    "var.slack_webhook_url",
+    "var.slack_channel",
+    "var.slack_username",
+    "var.slack_emoji",
+    "var.create_sns_topic",
+    "var.kms_key_arn",
+    "var.lambda_function_name",
+    "var.lambda_source_path",
+    "var.lambda_function_vpc_subnet_ids",
+    "var.lambda_function_vpc_security_group_ids",
+    "var.enable_sns_topic_delivery_status_logs",
+    "var.cloudwatch_log_group_retention_in_days",
+    "var.reserved_concurrent_executions",
+    "output.slack_topic_arn",
+    "output.notify_slack_lambda_function_arn",
+    "output.notify_slack_lambda_function_name",
+    "output.lambda_iam_role_arn",
+    "output.lambda_cloudwatch_log_group_arn",
+    "output.sns_topic_feedback_role_arn"
+  ]
+}
